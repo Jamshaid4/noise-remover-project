@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
@@ -26,12 +26,13 @@ import {
 } from 'lucide-react';
 import { Route, Switch, Router as WouterRouter } from 'wouter';
 import { Link } from 'wouter';
-import { AboutPage, AuthPage, BlogPage, ContactPage, FaqPage, NotFoundPage } from '@/pages/ProductPages';
+import { AboutPage, AuthPage, BlogPage, ContactPage, FaqPage, NotFoundPage, StudioPage } from '@/pages/ProductPages';
 
 const queryClient = new QueryClient();
 
 type ProcessingState = 'idle' | 'processing' | 'complete';
 type UploadTab = 'upload' | 'record';
+type RecordingState = 'idle' | 'recording' | 'ready';
 
 const navItems = [
   ['Home', '/'],
@@ -71,12 +72,71 @@ function UploadStudio() {
   const [file, setFile] = useState<File | null>(null);
   const [dragging, setDragging] = useState(false);
   const [state, setState] = useState<ProcessingState>('idle');
+  const [recordingState, setRecordingState] = useState<RecordingState>('idle');
+  const [recordedFile, setRecordedFile] = useState<File | null>(null);
+  const [recordingUrl, setRecordingUrl] = useState('');
+  const [recordingError, setRecordingError] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
 
   const acceptFile = (nextFile?: File) => {
     if (!nextFile) return;
     setFile(nextFile);
     setState('idle');
+  };
+
+  const startRecording = async () => {
+    setRecordingError('');
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      setRecordingError('Your browser does not support microphone recording. Please use Chrome, Edge, Safari, or Firefox on HTTPS.');
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'].find((type) => MediaRecorder.isTypeSupported(type));
+      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+      chunksRef.current = [];
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) chunksRef.current.push(event.data);
+      };
+      recorder.onerror = () => {
+        setRecordingError('Recording could not start. Please check your microphone permission and try again.');
+        setRecordingState('idle');
+        stream.getTracks().forEach((track) => track.stop());
+      };
+      recorder.onstop = () => {
+        const blob = new Blob(chunksRef.current, { type: recorder.mimeType || 'audio/webm' });
+        const extension = blob.type.includes('mp4') ? 'm4a' : 'webm';
+        const nextFile = new File([blob], `browser-recording-${new Date().toISOString().slice(0, 10)}.${extension}`, { type: blob.type });
+        setRecordedFile(nextFile);
+        setRecordingUrl(URL.createObjectURL(blob));
+        setRecordingState('ready');
+        stream.getTracks().forEach((track) => track.stop());
+      };
+      streamRef.current = stream;
+      recorderRef.current = recorder;
+      recorder.start();
+      setRecordingState('recording');
+    } catch {
+      setRecordingError('Microphone permission was not granted. Allow microphone access in your browser, then try again.');
+      setRecordingState('idle');
+    }
+  };
+
+  const stopRecording = () => {
+    if (recorderRef.current?.state === 'recording') recorderRef.current.stop();
+    recorderRef.current = null;
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+  };
+
+  const useRecording = () => {
+    if (!recordedFile) return;
+    setFile(recordedFile);
+    setState('idle');
+    setTab('upload');
   };
 
   const startProcessing = () => {
@@ -85,8 +145,13 @@ function UploadStudio() {
     window.setTimeout(() => setState('complete'), 1700);
   };
 
-  const fileUrl = file ? URL.createObjectURL(file) : undefined;
+  const fileUrl = useMemo(() => file ? URL.createObjectURL(file) : undefined, [file]);
   useEffect(() => () => { if (fileUrl) URL.revokeObjectURL(fileUrl); }, [fileUrl]);
+  useEffect(() => () => {
+    if (recorderRef.current?.state === 'recording') recorderRef.current.stop();
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    if (recordingUrl) URL.revokeObjectURL(recordingUrl);
+  }, [recordingUrl]);
 
   return (
       <div className="upload-card" id="studio" data-testid="card-upload-studio">
@@ -148,10 +213,23 @@ function UploadStudio() {
       ) : (
         <>
           <div className="record-state" data-testid="record-demo-state">
-            <span className="record-dot" />
-            <strong>Ready when you are</strong>
-            <p>Record a short sample in this browser, then choose when to send it for noise removal.</p>
-            <button className="btn btn-outline btn-small" type="button" onClick={() => setTab('upload')} data-testid="button-record-demo"><Mic size={13} /> Start a demo recording</button>
+            <span className={`record-dot ${recordingState === 'recording' ? 'recording' : ''}`} />
+            <strong>{recordingState === 'recording' ? 'Recording in progress' : recordingState === 'ready' ? 'Your recording is ready' : 'Ready when you are'}</strong>
+            <p>{recordingState === 'recording' ? 'Speak clearly, then stop when you are finished.' : 'Record a short sample in this browser, then choose when to send it for noise removal.'}</p>
+            {recordingState === 'recording' ? (
+              <button className="btn btn-dark btn-small" type="button" onClick={stopRecording} data-testid="button-stop-recording"><Pause size={13} /> Stop recording</button>
+            ) : recordingState === 'ready' && recordedFile ? (
+              <>
+                <audio className="recording-preview" controls src={recordingUrl} />
+                <div className="recording-actions">
+                  <button className="btn btn-orange btn-small" type="button" onClick={useRecording} data-testid="button-use-recording"><Check size={13} /> Use this recording</button>
+                  <button className="btn btn-outline btn-small" type="button" onClick={startRecording} data-testid="button-record-again"><Mic size={13} /> Record again</button>
+                </div>
+              </>
+            ) : (
+              <button className="btn btn-outline btn-small" type="button" onClick={startRecording} data-testid="button-record-demo"><Mic size={13} /> Start recording</button>
+            )}
+            {recordingError && <div className="form-error recording-error" role="alert">{recordingError}</div>}
           </div>
           <div className="upload-types">Your microphone is never opened without your action.</div>
           <div className="mode-row"><span>Processing mode</span><strong>{mode}</strong></div>
@@ -274,6 +352,7 @@ function Router() {
     <Route path="/about" component={AboutPage} />
     <Route path="/faq" component={FaqPage} />
     <Route path="/contact" component={ContactPage} />
+    <Route path="/studio" component={StudioPage} />
     <Route path="/login"><AuthPage mode="login" /></Route>
     <Route path="/signup"><AuthPage mode="signup" /></Route>
     <Route component={NotFoundPage} />
