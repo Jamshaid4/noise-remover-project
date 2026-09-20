@@ -1,6 +1,6 @@
 import { ArrowRight, Menu, X } from 'lucide-react';
 import { useState } from 'react';
-import { Link } from 'wouter';
+import { Link, useLocation } from 'wouter';
 
 const links = [
   ['Blog', '/blog'],
@@ -20,6 +20,13 @@ export function ProductLogo() {
 
 export function ProductShell({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
+  const [loggedIn, setLoggedIn] = useState(() => Boolean(localStorage.getItem('nr-session')));
+  const [, navigate] = useLocation();
+  const logout = () => {
+    localStorage.removeItem('nr-session');
+    setLoggedIn(false);
+    navigate('/');
+  };
   return (
     <div className="site-shell internal-shell">
       <header className="topbar">
@@ -34,8 +41,7 @@ export function ProductShell({ children }: { children: React.ReactNode }) {
             ))}
           </nav>
           <div className="nav-actions">
-            <Link className="btn btn-outline btn-small" href="/login" data-testid="link-login">Log in</Link>
-            <Link className="btn btn-dark btn-small" href="/signup" data-testid="link-signup">Sign up free</Link>
+            {loggedIn ? <button className="btn btn-outline btn-small" type="button" onClick={logout} data-testid="button-logout">Log out</button> : <><Link className="btn btn-outline btn-small" href="/login" data-testid="link-login">Log in</Link><Link className="btn btn-dark btn-small" href="/signup" data-testid="link-signup">Sign up free</Link></>}
           </div>
         </div>
       </header>
