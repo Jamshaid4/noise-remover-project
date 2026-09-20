@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "Noise Remover"
+description = "A polished browser-based audio cleanup app inspired by noise-remover.com, with upload, processing, playback, and download interactions."
+version = "1.0.0"
+id = "artifacts/noise-remover-clone"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 24163
+
+[services.development]
+run = "pnpm --filter @workspace/noise-remover-clone run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/noise-remover-clone", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/noise-remover-clone/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "24163"
+BASE_PATH = "/"
