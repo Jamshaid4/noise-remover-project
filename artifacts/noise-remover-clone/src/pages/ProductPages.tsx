@@ -10,6 +10,13 @@ function sizeOf(bytes: number) { return bytes < 1024 * 1024 ? `${Math.max(1, Mat
 
 type BlogArticle = { title: string; category: string; date: string; read: string; copy: string; body?: string };
 const blogStorageKey = 'noise-remover-published-articles';
+type StoredAccount = { name: string; email: string; passwordHash: string };
+
+async function hashPassword(password: string) {
+  const encoded = new TextEncoder().encode(password);
+  const digest = await crypto.subtle.digest('SHA-256', encoded);
+  return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
 
 function getPublishedArticles(): BlogArticle[] {
   try {
@@ -25,6 +32,14 @@ function savePublishedArticle(article: BlogArticle) {
 }
 
 export function StudioPage() {
+  const [, navigate] = useLocation();
+  const [account] = useState<StoredAccount | null>(() => {
+    try {
+      return JSON.parse(localStorage.getItem('nr-account') || 'null') as StoredAccount | null;
+    } catch {
+      return null;
+    }
+  });
   const [file, setFile] = useState<File | null>(null);
   const [mode, setMode] = useState('Auto');
   const [dragging, setDragging] = useState(false);
@@ -32,6 +47,9 @@ export function StudioPage() {
   const [progress, setProgress] = useState(0);
   const [jobs, setJobs] = useState<Job[]>(() => { try { return JSON.parse(localStorage.getItem('nr-jobs') || '[]'); } catch { return []; } });
   const inputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (!localStorage.getItem('nr-session') || !account) navigate('/login');
+  }, [account, navigate]);
   const previewUrl = useMemo(() => file ? URL.createObjectURL(file) : '', [file]);
   useEffect(() => () => { if (previewUrl) URL.revokeObjectURL(previewUrl); }, [previewUrl]);
   useEffect(() => {
@@ -48,9 +66,10 @@ export function StudioPage() {
   const choose = (next?: File) => { if (next) { setFile(next); setStatus('idle'); setProgress(0); } };
   const start = () => { if (file) { setProgress(4); setStatus('processing'); } };
   const download = () => { if (!previewUrl || !file) return; const a = document.createElement('a'); a.href = previewUrl; a.download = `clean-${file.name}`; a.click(); };
+  if (!account || !localStorage.getItem('nr-session')) return null;
   return <ProductShell>
     <main className="internal-main studio-page">
-      <div className="container"><PageIntro kicker="The Noise Remover studio" title="A calmer room for every recording." copy="Drop in a voice memo, interview, podcast take, or video. Choose how much room to remove, then preview the result before it leaves your device." /></div>
+      <div className="container"><PageIntro kicker={`Welcome, ${account.name}`} title="A calmer room for every recording." copy="Drop in a voice memo, interview, podcast take, or video. Choose how much room to remove, then preview the result before it leaves your device." /></div>
       <div className="container studio-layout">
         <section className="studio-workspace">
           <div className="workspace-top"><div><span className="eyebrow"><Sparkles size={10} /> Workspace</span><h2>Clean a recording</h2></div><span className="privacy-chip"><ShieldCheck size={14} /> Private by default</span></div>
@@ -148,7 +167,34 @@ export function AuthPage({ mode }: { mode: 'login' | 'signup' }) {
   const [show, setShow] = useState(false); const [error, setError] = useState('');
   const [, navigate] = useLocation();
   const signup = mode === 'signup';
-  const submit = (e: React.FormEvent<HTMLFormElement>) => { e.preventDefault(); const data = new FormData(e.currentTarget); const name = String(data.get('name') || '').trim(); const email = String(data.get('email') || '').trim(); const password = String(data.get('password') || ''); if (!email.includes('@')) { setError('Enter a valid email address.'); return; } if (password.length < 8) { setError('Use at least 8 characters for your password.'); return; } localStorage.setItem('nr-account', JSON.stringify({ name: name || 'Noise Remover member', email })); localStorage.setItem('nr-session', 'active'); setError(''); navigate('/studio'); };
+  const submit = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const data = new FormData(e.currentTarget);
+    const name = String(data.get('name') || '').trim();
+    const email = String(data.get('email') || '').trim().toLowerCase();
+    const password = String(data.get('password') || '');
+    if (signup && !name) { setError('Enter your name.'); return; }
+    if (!email.includes('@')) { setError('Enter a valid email address.'); return; }
+    if (password.length < 8) { setError('Use at least 8 characters for your password.'); return; }
+    try {
+      const passwordHash = await hashPassword(password);
+      const existing = JSON.parse(localStorage.getItem('nr-account') || 'null') as StoredAccount | null;
+      if (signup) {
+        if (existing) { setError('An account already exists in this browser. Log in instead.'); return; }
+        localStorage.setItem('nr-account', JSON.stringify({ name, email, passwordHash }));
+      } else {
+        if (!existing || existing.email !== email || existing.passwordHash !== passwordHash) {
+          setError('Email or password is incorrect. Create an account first if you are new here.');
+          return;
+        }
+      }
+      localStorage.setItem('nr-session', 'active');
+      setError('');
+      navigate('/studio');
+    } catch {
+      setError('Authentication is unavailable in this browser. Please try again on the secure website.');
+    }
+  };
   return <div className="auth-page"><div className="auth-aside"><ProductLogo /><div><div className="section-kicker">A clearer place to work</div><h1>{signup ? 'Give every recording a little more room.' : 'Welcome back to the listening room.'}</h1><p>{signup ? 'Create a free workspace for the voices, interviews, and ideas you do not want to lose.' : 'Your recent clean-ups and next clear take are only a few clicks away.'}</p></div><div className="auth-aside-note"><ShieldCheck size={16} /> Private processing. No training on your recordings.</div></div><main className="auth-card-wrap"><div className="auth-card"><div className="auth-heading"><Link className="back-link" href="/"><ArrowLeft size={14} /> Back home</Link><div className="section-kicker">{signup ? 'Start free' : 'Your workspace'}</div><h2>{signup ? 'Create your account' : 'Log in to Noise Remover'}</h2><p>{signup ? 'No card required. You can try the free uploader before deciding.' : 'Use any email and an 8-character password.'}</p></div><form onSubmit={submit} className="auth-form">{error && <div className="form-error" role="alert">{error}</div>}{signup && <label>Name<input name="name" autoComplete="name" placeholder="Your name" data-testid="input-auth-name" /></label>}<label>Email<input name="email" type="email" autoComplete={signup ? 'email' : 'username'} placeholder="you@example.com" data-testid="input-auth-email" /></label><label>Password<div className="password-wrap"><input name="password" type={show ? 'text' : 'password'} autoComplete={signup ? 'new-password' : 'current-password'} placeholder="8+ characters" data-testid="input-auth-password" /><button type="button" onClick={() => setShow(!show)} data-testid="button-toggle-password">{show ? 'Hide' : 'Show'}</button></div></label><button className="btn btn-orange" type="submit" data-testid="button-auth-submit">{signup ? 'Create free account' : 'Log in'} <ArrowRight size={14} /></button></form><p className="auth-switch">{signup ? 'Already have a workspace?' : 'New to Noise Remover?'} <Link href={signup ? '/login' : '/signup'}>{signup ? 'Log in' : 'Sign up free'}</Link></p></div></main></div>;
 }
 
